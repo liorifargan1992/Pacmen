@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>פקמן — משחק לימודי</title>
+
+<!-- ============================================================
+     חלק 1: העיצוב (CSS)
+     ============================================================
+     CSS זה "חוקי הלבוש" של הדף: איזה צבע, איזה גודל, איפה
+     כל דבר יושב. הוא לא עושה כלום "חכם" — רק קובע מראה.
+     ============================================================ -->
+<style>
+  body {
+    background: #000;            /* רקע שחור, כמו בארקייד */
+    color: #fff;
+    font-family: 'Courier New', monospace;
+    display: flex;               /* flex = סידור אוטומטי של פריטים */
+    flex-direction: column;
+    align-items: center;         /* הכל ממורכז אופקית */
+    min-height: 100vh;           /* vh = אחוז מגובה המסך */
+    margin: 0;
+    padding-top: 16px;
+  }
+
+  h1 { color: #ffd700; margin: 8px 0; letter-spacing: 4px; }
+
+  /* שורת הניקוד מעל לוח המשחק */
+  #hud {
+    display: flex;
+    gap: 40px;                   /* רווח בין ניקוד לחיים */
+    font-size: 20px;
+    margin-bottom: 8px;
+    direction: ltr;
+  }
+
+  /* ה"קנבס" — משטח הציור שעליו המשחק מצויר, פיקסל-פיקסל */
+  canvas {
+    border: 3px solid #2121ff;
+    border-radius: 8px;
+    background: #000;
+  }
+
+  /* הודעת ניצחון/הפסד ששוכבת מעל המשחק */
+  #message {
+    position: fixed;             /* "מרחף" מעל הכל */
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.85);
+    border: 2px solid #ffd700;
+    border-radius: 12px;
+    padding: 24px 48px;
+    text-align: center;
+    font-size: 28px;
+    display: none;               /* מוסתר עד שצריך */
+  }
+  #message button {
+    margin-top: 16px;
+    font-size: 18px;
+    padding: 8px 24px;
+    background: #ffd700;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  #help { color: #888; margin-top: 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     חלק 2: השלד (HTML)
+     ============================================================
+     HTML זה "השלד" של הדף — אילו קופסאות קיימות.
+     שימו לב שאין כאן כמעט כלום: כל המשחק מצויר בתוך
+     ה-<canvas>, שהוא כמו דף ציור ריק שנותנים לתוכנה.
+     ============================================================ -->
+<h1>PACMAN</h1>
+<div id="hud">
+  <span>SCORE: <span id="score">0</span></span>
+  <span>LIVES: <span id="lives">3</span></span>
+</div>
+<canvas id="game" width="532" height="588"></canvas>
+<div id="help">חצים / WASD לתזוזה · אכלו את כל הנקודות · היזהרו מהרוחות!</div>
+
+<div id="message">
+  <div id="message-text"></div>
+  <button onclick="location.reload()">משחק חדש</button>
+</div>
+
+<!-- ============================================================
+     חלק 3: המוח (JavaScript)
+     ============================================================
+     כאן קורה כל ה"חכם". הקוד רץ בדפדפן של המשתמש.
+     המבנה הכללי של כל משחק מחשב הוא אותו דבר:
+
+       1. מצב (State)   — "מה קורה עכשיו": איפה פקמן, כמה נקודות...
+       2. קלט (Input)   — מה השחקן לוחץ
+       3. עדכון (Update) — חוקי המשחק משנים את המצב
+       4. ציור (Render)  — מציירים את המצב החדש על המסך
+
+     שלבים 2–4 חוזרים ~60 פעם בשנייה. זה נקרא "לולאת המשחק"
+     (Game Loop) — כמו סרט: הרבה תמונות סטילס ברצף מהיר.
+     ============================================================ -->
+<script>
+'use strict';
+
+/* ------------------------------------------------------------
+   3.1 המפה — הלוח מוגדר כטבלה של תווים
+   ------------------------------------------------------------
+   במקום לצייר מבוך "ביד", מגדירים אותו כרשת (grid):
+     # = קיר
+     . = נקודה רגילה (10 נק')
+     o = נקודת-על (50 נק' + הרוחות נבהלות)
+     (רווח) = מעבר ריק
+     P = נקודת ההתחלה של פקמן
+     G = נקודת ההתחלה של רוח
+
+   זה עיקרון חשוב בתכנות: להפריד בין "הנתונים" (המפה)
+   לבין "הלוגיקה" (הקוד שמטפל בה). רוצים מבוך אחר?
+   משנים רק את הטקסט כאן — שום קוד אחר לא צריך להשתנות.
+   ------------------------------------------------------------ */
+const MAZE_TEXT = [
+  "###################",
+  "#o.......#.......o#",
+  "#.##.###.#.###.##.#",
+  "#.................#",
+  "#.##.#.#####.#.##.#",
+  "#....#...#...#....#",
+  "####.###.#.###.####",
+  "####.#.......#.####",
+  "####.#.## ##.#.####",
+  "    .  #GGG#  .    ",
+  "####.#.#####.#.####",
+  "#....#...#...#....#",
+  "#.##.###.#.###.##.#",
+  "#o.#.....P.....#.o#",
+  "#.##.#.#####.#.##.#",
+  "#....#...#...#....#",
+  "#.######.#.######.#",
+  "#.................#",
+  "###################",
+];
+
+const TILE = 28;                       // גודל כל משבצת בפיקסלים
+const ROWS = MAZE_TEXT.length;         // כמה שורות במפה
+const COLS = MAZE_TEXT[0].length;      // כמה עמודות
+
+/* המרה של טקסט המפה למבנה נתונים נוח:
+   grid[row][col] יגיד לנו מה יש בכל משבצת.
+   בנוסף אוספים את נקודות ההתחלה של הדמויות.        */
+let grid = [];
+let pacmanStart = null;
+let ghostStarts = [];
+let dotsLeft = 0;                      // כמה נקודות נשארו לאכול
+
+for (let r = 0; r < ROWS; r++) {
+  grid.push([]);
+  for (let c = 0; c < COLS; c++) {
+    let ch = MAZE_TEXT[r][c] || ' ';
+    if (ch === 'P') { pacmanStart = {r, c}; ch = ' '; }
+    if (ch === 'G') { ghostStarts.push({r, c}); ch = ' '; }
+    if (ch === '.' || ch === 'o') dotsLeft++;
+    grid[r].push(ch);
+  }
+}
+
+/* ------------------------------------------------------------
+   3.2 מצב המשחק (State)
+   ------------------------------------------------------------
+   כל מה שמשתנה תוך כדי משחק נשמר במשתנים.
+   "משתנה" = קופסה עם שם, שאפשר לשים בה ערך ולהחליף אותו.
+   ------------------------------------------------------------ */
+let score = 0;
+let lives = 3;
+let gameOver = false;
+let frightenedTimer = 0;   // כמה פריימים נשארו למצב "רוחות מפוחדות"
+
+/* הכיוונים מוגדרים פעם אחת כאובייקטים {dr, dc}:
+   dr = שינוי בשורה, dc = שינוי בעמודה.
+   למשל "למעלה" = שורה אחת פחות, אותה עמודה.            */
+const DIRS = {
+  up:    {dr: -1, dc: 0},
+  down:  {dr: 1,  dc: 0},
+  left:  {dr: 0,  dc: -1},
+  right: {dr: 0,  dc: 1},
+  none:  {dr: 0,  dc: 0},
+};
+
+/* פקמן הוא "אובייקט" — קופסה שמאגדת כמה תכונות יחד:
+   מיקום (בפיקסלים, כדי שהתנועה תהיה חלקה), כיוון נוכחי,
+   וכיוון "מבוקש" (מה שהשחקן לחץ, יופעל כשיהיה אפשרי).   */
+const pacman = {
+  x: 0, y: 0,               // מיקום בפיקסלים (מרכז הדמות)
+  dir: 'none',              // לאן זז עכשיו
+  wishDir: 'none',          // לאן השחקן רוצה לפנות
+  speed: 2.2,               // פיקסלים לפריים
+  mouth: 0,                 // זווית הפה (לאנימציה)
+};
+
+/* הרוחות — מערך (רשימה) של אובייקטים דומים.
+   לכל רוח יש צבע ו"אופי" קטן: כמה היא רודפת לעומת נעה אקראית. */
+const GHOST_COLORS = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852'];
+let ghosts = [];
+
+function resetPositions() {
+  /* פונקציה = מתכון עם שם. כתבנו פעם אחת "איך מאפסים
+     מיקומים", וקוראים לזה גם בתחילת משחק וגם אחרי פגיעה. */
+  pacman.x = (pacmanStart.c + 0.5) * TILE;
+  pacman.y = (pacmanStart.r + 0.5) * TILE;
+  pacman.dir = 'none';
+  pacman.wishDir = 'none';
+
+  ghosts = ghostStarts.map((g, i) => ({
+    x: (g.c + 0.5) * TILE,
+    y: (g.r + 0.5) * TILE,
+    dir: 'up',
+    speed: 1.8,
+    color: GHOST_COLORS[i % GHOST_COLORS.length],
+    chasing: 0.55 + i * 0.12,   // כל רוח קצת יותר/פחות "רודפנית"
+    home: {...g},
+  }));
+  frightenedTimer = 0;
+}
+
+/* ------------------------------------------------------------
+   3.3 קלט (Input) — הקשבה למקלדת
+   ------------------------------------------------------------
+   הדפדפן "מודיע" לנו על כל לחיצת מקש (אירוע, Event).
+   אנחנו רק רושמים את הבקשה — לא מזיזים את פקמן מיד.
+   למה? כי אולי יש קיר. הבקשה תתממש ברגע שהפנייה חוקית.
+   זה בדיוק מה שגורם לפקמן להרגיש "חלק" ולא מסורבל.
+   ------------------------------------------------------------ */
+const KEY_TO_DIR = {
+  ArrowUp: 'up',    KeyW: 'up',
+  ArrowDown: 'down',KeyS: 'down',
+  ArrowLeft: 'left',KeyA: 'left',
+  ArrowRight: 'right', KeyD: 'right',
+};
+
+document.addEventListener('keydown', (event) => {
+  const dir = KEY_TO_DIR[event.code];
+  if (dir) {
+    pacman.wishDir = dir;
+    event.preventDefault();     // שהחצים לא יגללו את הדף
+  }
+});
+
+/* ------------------------------------------------------------
+   3.4 פונקציות עזר — שאלות קטנות על העולם
+   ------------------------------------------------------------ */
+
+/* באיזו משבצת נמצאת נקודת פיקסל? (חלוקה ועיגול כלפי מטה) */
+function tileAt(x, y) {
+  return { r: Math.floor(y / TILE), c: Math.floor(x / TILE) };
+}
+
+/* האם משבצת מסוימת היא קיר? כולל "גלישה" במנהרות הצד:
+   מי שיוצא מצד שמאל מופיע מימין (כמו בפקמן המקורי).       */
+function isWall(r, c) {
+  c = ((c % COLS) + COLS) % COLS;      // גלישה אופקית (מנהרה)
+  if (r < 0 || r >= ROWS) return true;
+  return grid[r][c] === '#';
+}
+
+/* האם דמות שנמצאת ב-(x,y) יכולה לזוז בכיוון dir?
+   בודקים את המשבצת שאליה נגיע.                              */
+function canMove(x, y, dir) {
+  const d = DIRS[dir];
+  if (dir === 'none') return false;
+  const half = TILE / 2 - 1;
+  // בודקים נקודה קצת לפני "האף" של הדמות בכיוון התנועה
+  const nx = x + d.dc * half + d.dc;
+  const ny = y + d.dr * half + d.dr;
+  const t = tileAt(nx, ny);
+  return !isWall(t.r, t.c);
+}
+
+/* האם הדמות במרכז משבצת? (רק שם מותר לפנות, כדי לא להיתקע בקירות) */
+function atTileCenter(x, y) {
+  const cx = x % TILE, cy = y % TILE;
+  const mid = TILE / 2;
+  return Math.abs(cx - mid) < 2.5 && Math.abs(cy - mid) < 2.5;
+}
+
+/* "הצמדה" למרכז המשבצת — מונעת סטיות קטנות שמצטברות */
+function snapToCenter(entity) {
+  const t = tileAt(entity.x, entity.y);
+  entity.x = (t.c + 0.5) * TILE;
+  entity.y = (t.r + 0.5) * TILE;
+}
+
+/* ------------------------------------------------------------
+   3.5 עדכון (Update) — חוקי המשחק, פריים אחד קדימה
+   ------------------------------------------------------------ */
+
+function movePacman() {
+  /* פנייה: רק במרכז משבצת, ורק אם אין קיר בכיוון המבוקש */
+  if (pacman.wishDir !== pacman.dir && atTileCenter(pacman.x, pacman.y)) {
+    if (canMove(pacman.x, pacman.y, pacman.wishDir)) {
+      snapToCenter(pacman);
+      pacman.dir = pacman.wishDir;
+    }
+  }
+  /* היפוך כיוון (ימינה<->שמאלה) מותר תמיד, גם באמצע מסדרון */
+  const opposite = {up:'down', down:'up', left:'right', right:'left'};
+  if (pacman.wishDir === opposite[pacman.dir]) pacman.dir = pacman.wishDir;
+
+  /* תנועה: אם אין קיר — מתקדמים; אם יש — נעצרים במרכז */
+  if (canMove(pacman.x, pacman.y, pacman.dir)) {
+    const d = DIRS[pacman.dir];
+    pacman.x += d.dc * pacman.speed;
+    pacman.y += d.dr * pacman.speed;
+  } else if (pacman.dir !== 'none') {
+    snapToCenter(pacman);
+  }
+
+  /* מנהרה: יצאת שמאלה? הופעת מימין (ולהפך) */
+  const width = COLS * TILE;
+  if (pacman.x < 0) pacman.x += width;
+  if (pacman.x >= width) pacman.x -= width;
+
+  /* אכילה: מה יש במשבצת שבה פקמן נמצא עכשיו? */
+  const t = tileAt(pacman.x, pacman.y);
+  const cell = grid[t.r] && grid[t.r][t.c];
+  if (cell === '.' || cell === 'o') {
+    grid[t.r][t.c] = ' ';              // מוחקים את הנקודה מהמפה
+    dotsLeft--;
+    score += (cell === 'o') ? 50 : 10;
+    if (cell === 'o') frightenedTimer = 60 * 7;  // 7 שניות פחד
+    updateHud();
+    if (dotsLeft === 0) endGame(true);
+  }
+
+  pacman.mouth += 0.25;                // מקדם אנימציית פה
+}
+
+function moveGhost(ghost) {
+  /* הרוח מחליטה החלטות רק במרכז משבצת — כמו במקור */
+  if (atTileCenter(ghost.x, ghost.y)) {
+    snapToCenter(ghost);
+    const opposite = {up:'down', down:'up', left:'right', right:'left'};
+
+    /* אילו כיוונים אפשריים? (בלי לחזור אחורה, אלא אם אין ברירה) */
+    let options = Object.keys(DIRS).filter(d =>
+      d !== 'none' &&
+      d !== opposite[ghost.dir] &&
+      canMove(ghost.x, ghost.y, d)
+    );
+    if (options.length === 0) options = [opposite[ghost.dir]];
+
+    /* ה"בינה" של הרוח — פשוטה להפליא:
+       ברוב הפעמים היא בוחרת את הכיוון שמקרב אותה לפקמן
+       (או מרחיק, אם היא מפוחדת). בשאר הפעמים — אקראי.
+       שילוב של "מטרה + אקראיות" מרגיש חי בלי להיות מושלם. */
+    let chosen;
+    if (Math.random() < ghost.chasing) {
+      const flee = frightenedTimer > 0 ? -1 : 1;  // לברוח או לרדוף
+      let best = -Infinity;
+      for (const d of options) {
+        const dd = DIRS[d];
+        // כמה הכיוון הזה מקרב אותנו לפקמן? (מכפלה סקלרית פשוטה)
+        const gain = flee * (
+          dd.dc * Math.sign(pacman.x - ghost.x) +
+          dd.dr * Math.sign(pacman.y - ghost.y)
+        );
+        if (gain > best) { best = gain; chosen = d; }
+      }
+    } else {
+      chosen = options[Math.floor(Math.random() * options.length)];
+    }
+    ghost.dir = chosen;
+  }
+
+  /* תנועה בפועל — רוחות מפוחדות זזות לאט יותר */
+  const slow = frightenedTimer > 0 ? 0.6 : 1;
+  const d = DIRS[ghost.dir];
+  ghost.x += d.dc * ghost.speed * slow;
+  ghost.y += d.dr * ghost.speed * slow;
+
+  const width = COLS * TILE;
+  if (ghost.x < 0) ghost.x += width;
+  if (ghost.x >= width) ghost.x -= width;
+}
+
+function checkCollisions() {
+  /* "התנגשות" = המרחק בין שני מרכזים קטן מסף מסוים.
+     מחשבים מרחק בעזרת משפט פיתגורס — כן, זה מהתיכון. */
+  for (const ghost of ghosts) {
+    const dx = ghost.x - pacman.x;
+    const dy = ghost.y - pacman.y;
+    const dist = Math.hypot(dx, dy);   // שורש של dx²+dy²
+    if (dist < TILE * 0.7) {
+      if (frightenedTimer > 0) {
+        /* פקמן אוכל את הרוח! היא חוזרת הביתה */
+        score += 200;
+        updateHud();
+        ghost.x = (ghost.home.c + 0.5) * TILE;
+        ghost.y = (ghost.home.r + 0.5) * TILE;
+      } else {
+        /* הרוח תפסה את פקמן */
+        lives--;
+        updateHud();
+        if (lives <= 0) endGame(false);
+        else resetPositions();
+        return;
+      }
+    }
+  }
+}
+
+function update() {
+  movePacman();
+  for (const ghost of ghosts) moveGhost(ghost);
+  checkCollisions();
+  if (frightenedTimer > 0) frightenedTimer--;
+}
+
+/* ------------------------------------------------------------
+   3.6 ציור (Render) — מהמצב אל המסך
+   ------------------------------------------------------------
+   בכל פריים מוחקים הכל ומציירים מחדש מאפס.
+   נשמע בזבזני? למחשב זה כלום, ולנו זה חוסך את הצורך
+   לעקוב "מה השתנה". פשטות > תחכום.
+   ------------------------------------------------------------ */
+const canvas = document.getElementById('game');
+canvas.width = COLS * TILE;
+canvas.height = ROWS * TILE;
+const ctx = canvas.getContext('2d');   // "המכחול" של הקנבס
+
+function drawMaze() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const cell = grid[r][c];
+      const x = c * TILE, y = r * TILE;
+      if (cell === '#') {
+        ctx.fillStyle = '#2121ff';
+        ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+      } else if (cell === '.') {
+        ctx.fillStyle = '#ffb8ae';
+        ctx.beginPath();
+        ctx.arc(x + TILE/2, y + TILE/2, 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (cell === 'o') {
+        /* נקודת-על מהבהבת: משתמשים בזמן כדי להחליף גודל */
+        const pulse = 6 + Math.sin(Date.now() / 150) * 2;
+        ctx.fillStyle = '#ffb8ae';
+        ctx.beginPath();
+        ctx.arc(x + TILE/2, y + TILE/2, pulse, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function drawPacman() {
+  /* הפה נפתח ונסגר לפי גל סינוס — מתמטיקה שיוצרת אנימציה */
+  const open = Math.abs(Math.sin(pacman.mouth)) * 0.28 * Math.PI;
+  const angles = {right: 0, down: Math.PI/2, left: Math.PI, up: -Math.PI/2, none: 0};
+  const base = angles[pacman.dir];
+
+  ctx.fillStyle = '#ffd700';
+  ctx.beginPath();
+  ctx.moveTo(pacman.x, pacman.y);
+  ctx.arc(pacman.x, pacman.y, TILE/2 - 3, base + open, base - open + Math.PI * 2);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawGhost(ghost) {
+  const r = TILE/2 - 3;
+  /* רוח מפוחדת = כחולה, ומהבהבת לבן לקראת סוף הפחד */
+  let color = ghost.color;
+  if (frightenedTimer > 0) {
+    const flashing = frightenedTimer < 120 && Math.floor(frightenedTimer / 12) % 2 === 0;
+    color = flashing ? '#fff' : '#2121de';
+  }
+
+  /* גוף: חצי עיגול למעלה + "שוליים גליים" למטה */
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(ghost.x, ghost.y, r, Math.PI, 0);
+  const bottom = ghost.y + r;
+  ctx.lineTo(ghost.x + r, bottom);
+  for (let i = 0; i < 3; i++) {
+    const w = (r * 2) / 3;
+    ctx.quadraticCurveTo(
+      ghost.x + r - w * (i + 0.5), bottom - 7,
+      ghost.x + r - w * (i + 1), bottom
+    );
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  /* עיניים — שני עיגולים לבנים עם אישונים שמביטים לכיוון התנועה */
+  const d = DIRS[ghost.dir];
+  for (const side of [-1, 1]) {
+    const ex = ghost.x + side * r * 0.38;
+    const ey = ghost.y - r * 0.15;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ex, ey, 4.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#00f';
+    ctx.beginPath(); ctx.arc(ex + d.dc * 2, ey + d.dr * 2, 2.2, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);  // מחיקת הפריים הקודם
+  drawMaze();
+  drawPacman();
+  for (const ghost of ghosts) drawGhost(ghost);
+}
+
+/* ------------------------------------------------------------
+   3.7 ממשק ומצבי סיום
+   ------------------------------------------------------------ */
+function updateHud() {
+  /* מעדכנים את הטקסט בדף. getElementById = "תמצא לי את
+     הקופסה עם השם הזה" — הגשר בין הקוד לבין ה-HTML.       */
+  document.getElementById('score').textContent = score;
+  document.getElementById('lives').textContent = lives;
+}
+
+function endGame(won) {
+  gameOver = true;
+  const box = document.getElementById('message');
+  document.getElementById('message-text').textContent =
+    won ? `ניצחת! 🏆 ${score} נקודות` : `נתפסת! 👻 ${score} נקודות`;
+  box.style.display = 'block';
+}
+
+/* ------------------------------------------------------------
+   3.8 לולאת המשחק — הלב הפועם
+   ------------------------------------------------------------
+   requestAnimationFrame אומר לדפדפן: "לפני שאתה מצייר את
+   המסך הבא, תריץ את הפונקציה שלי". וכך, שוב ושוב, ~60
+   פעמים בשנייה: עדכון → ציור → עדכון → ציור...
+   ------------------------------------------------------------ */
+function gameLoop() {
+  if (!gameOver) {
+    update();
+    render();
+    requestAnimationFrame(gameLoop);   // "תקרא לי שוב בפריים הבא"
+  }
+}
+
+/* התנעה: מאפסים מיקומים ומשגרים את הלולאה */
+resetPositions();
+updateHud();
+gameLoop();
+</script>
+</body>
+</html>
